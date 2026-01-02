@@ -11,6 +11,7 @@
     "@scalar/hono-api-reference": "^0.9.30",
     "hono": "^4.11.3",
     "moment": "^2.30.1",
+    "moment-timezone": "^0.6.0",
     "zod": "^4.3.4"
   },
   "devDependencies": {

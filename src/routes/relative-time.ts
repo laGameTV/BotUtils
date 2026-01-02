@@ -1,25 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
-import moment, { type Moment, type unitOfTime } from "moment";
-
-function parseDate(input: string): Moment | null {
-	const numericValue = Number(input);
-	if (!isNaN(numericValue)) {
-		// If it's a reasonable Unix timestamp in seconds (before year 3000)
-		if (numericValue < 32503680000) {
-			return moment(numericValue * 1000);
-		}
-		// Already in milliseconds
-		return moment(numericValue);
-	}
-
-	// Try parsing as ISO date string
-	const date = new Date(input);
-	if (!isNaN(date.getTime())) {
-		return moment(date);
-	}
-
-	return null;
-}
+import moment, { type unitOfTime } from "moment-timezone";
 
 const unitOfTimeBase: unitOfTime.Base[] = [
 	"year",
@@ -64,12 +44,20 @@ const route = createRoute({
 	request: {
 		query: z.object({
 			date: z.string().openapi({
-				description: "Date as Unix timestamp (seconds or milliseconds) or ISO 8601 string",
-				example: "1735776000",
+				description: "Date in format YYYY-MM-DD or YYYY-MM-DD HH:mm or YYYY-MM-DD HH:mm:ss",
+				examples: ["2026-01-01", "2026-01-01 14:30", "2026-01-01 14:30:45"],
 			}),
+			timezone: z
+				.string()
+				.optional()
+				.openapi({
+					description: "IANA timezone name (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List)",
+					default: "Europe/Berlin",
+					examples: ["Europe/Berlin", "America/New_York"],
+				}),
 			output: z.enum(unitOfTimeBase).openapi({
 				description: "Unit of time for the result",
-				example: "years",
+				example: "days",
 			}),
 		}),
 	},
@@ -86,12 +74,12 @@ const route = createRoute({
 			},
 		},
 		400: {
-			description: "Invalid date format",
+			description: "Invalid date format or timezone",
 			content: {
 				"application/json": {
 					schema: z.object({
 						error: z.string().openapi({
-							example: "Invalid timestamp format. Use Unix timestamp (s/ms) or ISO 8601 string.",
+							examples: ["Invalid date format. Use YYYY-MM-DD, YYYY-MM-DD HH:mm, or YYYY-MM-DD HH:mm:ss", "Invalid date format or timezone."],
 						}),
 					}),
 				},
@@ -101,14 +89,20 @@ const route = createRoute({
 });
 
 relativeTime.openapi(route, (c) => {
-	const { date, output } = c.req.valid("query");
+	const { date, timezone = "Europe/Berlin", output } = c.req.valid("query");
 
-	const targetMoment = parseDate(date);
-	if (targetMoment === null) {
-		return c.json({ error: "Invalid timestamp format. Use Unix timestamp (s/ms) or ISO 8601 string." }, 400);
+	try {
+		const formats = ["YYYY-MM-DD", "YYYY-MM-DD HH:mm", "YYYY-MM-DD HH:mm:ss"];
+		const targetMoment = moment.tz(date, formats, true, timezone);
+
+		if (!targetMoment.isValid()) {
+			return c.json({ error: "Invalid date format. Use YYYY-MM-DD, YYYY-MM-DD HH:mm, or YYYY-MM-DD HH:mm:ss" }, 400);
+		}
+
+		return c.text(Math.abs(targetMoment.diff(moment(), output)).toString());
+	} catch (error) {
+		return c.json({ error: "Invalid date format or timezone." }, 400);
 	}
-
-	return c.text(Math.abs(targetMoment.diff(moment(), output)).toString());
 });
 
 export default relativeTime;
