@@ -99,7 +99,7 @@ relativeTime.openapi(route, (c) => {
 			return c.json({ error: "Invalid date format. Use YYYY-MM-DD, YYYY-MM-DD HH:mm, or YYYY-MM-DD HH:mm:ss" }, 400);
 		}
 
-		return c.text(Math.abs(targetMoment.diff(moment(), output)).toString());
+		return c.text(Math.abs(targetMoment.diff(moment.tz(timezone), output)).toString());
 	} catch (error) {
 		return c.json({ error: "Invalid date format or timezone." }, 400);
 	}
