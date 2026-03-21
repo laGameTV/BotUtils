@@ -1,5 +1,6 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import relativeTime from "./routes/relative-time";
+import mcsrranked from "./routes/mcsrranked";
 import { Scalar } from "@scalar/hono-api-reference";
 
 const app = new OpenAPIHono();
@@ -23,6 +24,10 @@ app.doc("/openapi.json", {
 		title: "BotUtils API",
 		description: "GitHub Repository: https://github.com/DerBanko/BotUtils",
 	},
+	tags: [
+		{ name: "General", description: "Miscellaneous utilities" },
+		{ name: "MCSR Ranked", description: "Minecraft Java speedrun ranked (https://mcsrranked.com)" },
+	],
 });
 
 app.get(
@@ -40,5 +45,6 @@ app.get(
 // === Routes ===
 
 app.route("/relative-time", relativeTime);
+app.route("/mcsrranked", mcsrranked);
 
 export default app;
