@@ -40,6 +40,7 @@ const relativeTime = new OpenAPIHono();
 const route = createRoute({
 	method: "get",
 	path: "/",
+	tags: ["General"],
 	description: "Calculate the absolute time difference between a given date and now",
 	request: {
 		query: z.object({
@@ -99,7 +100,7 @@ relativeTime.openapi(route, (c) => {
 			return c.json({ error: "Invalid date format. Use YYYY-MM-DD, YYYY-MM-DD HH:mm, or YYYY-MM-DD HH:mm:ss" }, 400);
 		}
 
-		return c.text(Math.abs(targetMoment.diff(moment.tz(timezone), output)).toString());
+		return c.text(Math.abs(targetMoment.diff(moment.tz(timezone), output)).toString(), 200);
 	} catch (error) {
 		return c.json({ error: "Invalid date format or timezone." }, 400);
 	}
