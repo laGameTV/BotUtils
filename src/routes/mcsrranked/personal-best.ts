@@ -2,15 +2,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 
 const personalBest = new OpenAPIHono();
 
-const MCSRRANKED_MATCHES = "https://api.mcsrranked.com/users";
-
-function normalizeUuid(s: string): string {
-	return s.replace(/-/g, "").toLowerCase();
-}
-
-function looksLikeUuid(s: string): boolean {
-	return /^[0-9a-f]{32}$/i.test(normalizeUuid(s.trim()));
-}
+const MCSRRANKED_USERS = "https://api.mcsrranked.com/users";
 
 function formatRtaMs(ms: number): string {
 	const totalSeconds = ms / 1000;
@@ -24,15 +16,17 @@ function formatRtaMs(ms: number): string {
 	return `${m}:${secPart}`;
 }
 
-type MatchRow = {
-	category?: string;
-	players?: { uuid: string; nickname?: string | null }[];
-	result?: { uuid: string | null; time: number | null } | null;
+type McsrUserProfile = {
+	nickname?: string;
+	statistics?: {
+		season?: { bestTime?: { ranked?: number | null } };
+		total?: { bestTime?: { ranked?: number | null } };
+	};
 };
 
-type MatchesApiBody = {
+type UserApiBody = {
 	status?: string;
-	data?: MatchRow[] | { error?: string };
+	data?: McsrUserProfile | { error?: string };
 };
 
 function mcsrErrorMessage(data: unknown): string | undefined {
@@ -50,48 +44,12 @@ function isMcsrPlayerNotExistError(message: string | undefined): boolean {
 	return message === "This player is not exist." || message.toLowerCase().includes("not exist");
 }
 
-function resolvePlayerUuid(matches: MatchRow[], identifier: string): string | null {
-	const idTrim = identifier.trim();
-	const idNorm = normalizeUuid(idTrim);
-
-	if (looksLikeUuid(idTrim)) {
-		for (const row of matches) {
-			for (const p of row.players ?? []) {
-				if (normalizeUuid(p.uuid) === idNorm) {
-					return normalizeUuid(p.uuid);
-				}
-			}
-		}
-		return idNorm;
-	}
-
-	for (const row of matches) {
-		for (const p of row.players ?? []) {
-			if (p.nickname?.toLowerCase() === idTrim.toLowerCase()) {
-				return normalizeUuid(p.uuid);
-			}
-		}
-	}
-	return null;
-}
-
-function displayName(matches: MatchRow[], playerUuidNorm: string, identifier: string): string {
-	for (const row of matches) {
-		for (const p of row.players ?? []) {
-			if (normalizeUuid(p.uuid) === playerUuidNorm && p.nickname) {
-				return p.nickname;
-			}
-		}
-	}
-	return identifier.trim();
-}
-
 const route = createRoute({
 	method: "get",
 	path: "/",
 	tags: ["MCSR Ranked"],
 	description:
-		"Best completed MCSR Ranked time (dragon kill) for a player, returned as formatted text.\n(Uses api.mcsrranked.com/users/{identifier}/matches.)",
+		"Best completed MCSR Ranked time (dragon kill) for a player, returned as formatted text.\n(Uses api.mcsrranked.com/users/{identifier} — ranked PB from profile statistics, not match history minima.)",
 	request: {
 		query: z.object({
 			identifier: z.string().min(1).openapi({
@@ -102,21 +60,21 @@ const route = createRoute({
 	},
 	responses: {
 		200: {
-			description: "Formatted summary line (nickname — MCSR Ranked PB: time (category))",
+			description: "Formatted summary line (nickname — MCSR Ranked PB: time (Ranked))",
 			content: {
 				"text/plain": {
 					schema: z.string().openapi({
-						example: "doogile — MCSR Ranked PB: 14:32.10 (ANY)",
+						example: "doogile — MCSR Ranked PB: 14:32.10 (Ranked)",
 					}),
 				},
 			},
 		},
 		404: {
-			description: "No qualifying match data for this identifier (empty history or no completed run)",
+			description: "No ranked PB in profile statistics for this player.",
 			content: {
 				"text/plain": {
 					schema: z.string().openapi({
-						example: "No matches returned for this player.",
+						example: "No ranked personal best found for this player.",
 					}),
 				},
 			},
@@ -148,7 +106,7 @@ const route = createRoute({
 
 personalBest.openapi(route, async (c) => {
 	const { identifier } = c.req.valid("query");
-	const url = `${MCSRRANKED_MATCHES}/${encodeURIComponent(identifier.trim())}/matches`;
+	const url = `${MCSRRANKED_USERS}/${encodeURIComponent(identifier.trim())}`;
 
 	let res: Response;
 	try {
@@ -158,14 +116,13 @@ personalBest.openapi(route, async (c) => {
 	}
 
 	const raw = await res.text();
-	let body: MatchesApiBody | undefined;
+	let body: UserApiBody | undefined;
 	try {
-		body = raw ? (JSON.parse(raw) as MatchesApiBody) : undefined;
+		body = raw ? (JSON.parse(raw) as UserApiBody) : undefined;
 	} catch {
 		body = undefined;
 	}
 
-	// MCSR often returns HTTP 400/404 with JSON `{ status: "error", data: { error } }` — handle before `!res.ok`.
 	if (body?.status === "error") {
 		const upstream = mcsrErrorMessage(body.data);
 		if (isMcsrPlayerNotExistError(upstream)) {
@@ -176,50 +133,27 @@ personalBest.openapi(route, async (c) => {
 	}
 
 	if (!res.ok) {
-		// Matches endpoint: 400/404 from MCSR are typically unknown player (body may be empty or non-JSON).
 		if (res.status === 404 || res.status === 400) {
 			return c.text("Player not found on MCSR Ranked.", 400);
 		}
 		return c.text(`MCSR Ranked API error (HTTP ${res.status}).`, 500);
 	}
 
-	if (body?.status !== "success" || !Array.isArray(body.data)) {
+	if (body?.status !== "success" || !body.data || typeof body.data !== "object" || "error" in body.data) {
 		return c.text("MCSR Ranked API returned an unexpected payload.", 500);
 	}
 
-	const matches = body.data;
-	if (matches.length === 0) {
-		return c.text("No matches returned for this player.", 404);
+	const data = body.data as McsrUserProfile;
+	const rankedMs =
+		data.statistics?.season?.bestTime?.ranked ?? data.statistics?.total?.bestTime?.ranked;
+
+	if (rankedMs == null || rankedMs <= 0) {
+		return c.text("No ranked personal best found for this player.", 404);
 	}
 
-	const playerUuidNorm = resolvePlayerUuid(matches, identifier);
-	if (!playerUuidNorm) {
-		return c.text("Could not resolve player UUID from match history.", 404);
-	}
-
-	let best: { time: number; category?: string } | null = null;
-	for (const row of matches) {
-		const ru = row.result?.uuid;
-		const rt = row.result?.time;
-		if (ru == null || rt == null) {
-			continue;
-		}
-		if (normalizeUuid(ru) !== playerUuidNorm) {
-			continue;
-		}
-		if (!best || rt < best.time) {
-			best = { time: rt, category: row.category };
-		}
-	}
-
-	if (!best) {
-		return c.text("No completed ranked run (dragon kill) found for this player.", 404);
-	}
-
-	const name = displayName(matches, playerUuidNorm, identifier);
-	const timeStr = formatRtaMs(best.time);
-	const cat = best.category ? ` (${best.category})` : "";
-	const line = `${name} — MCSR Ranked PB: ${timeStr}${cat}`;
+	const name = (typeof data.nickname === "string" && data.nickname.trim()) || identifier.trim();
+	const timeStr = formatRtaMs(rankedMs);
+	const line = `${name} — MCSR Ranked PB: ${timeStr} (Ranked)`;
 
 	return c.text(line);
 });
